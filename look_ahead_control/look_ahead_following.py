@@ -29,7 +29,7 @@ SPACING = 0.8       # distance between lines
 X_TOLERANCE = 0.1   # [meter]
 YAW_TOLERANCE = 40.0  # [degree]
 
-I_CONTROL_DIST = 0.1  # [meter], refer to cross_track_error
+CTE_CONTROL_DIST = 0.1  # [meter], refer to cross_track_error
 
 # translation value
 FORWARD_CONST = 1
@@ -73,7 +73,7 @@ class LookAheadFollowing(Node):
 
         # Declare parameters with defaults
         self.declare_parameter('Kp', 0.0)
-        self.declare_parameter('Ki', 0.0)
+        self.declare_parameter('Kcte', 0.0)
         self.declare_parameter('look_ahead', 0.0)
         self.declare_parameter('odom_source', 'odom')
 
@@ -190,7 +190,7 @@ class LookAheadFollowing(Node):
         rate = self.create_rate(FREQUENCY)
         seq = 1
         KP = 0.0
-        KI = 0.0
+        KCTE = 0.0
         look_ahead_dist = 0.0
 
         while rclpy.ok():
@@ -223,7 +223,7 @@ class LookAheadFollowing(Node):
 
             # get the parameters of look-ahead control
             KP = self.get_parameter('Kp').get_parameter_value().double_value
-            KI = self.get_parameter('Ki').get_parameter_value().double_value
+            KCTE = self.get_parameter('Kcte').get_parameter_value().double_value
             look_ahead_dist = self.get_parameter(
                 'look_ahead').get_parameter_value().double_value
 
@@ -293,11 +293,11 @@ class LookAheadFollowing(Node):
 
             # calculate the steering value
             p = KP * steering_ang
-            i = KI * own_y_tf
+            cte = KCTE * own_y_tf
 
             pid_value = p
-            if abs(own_y_tf) < I_CONTROL_DIST:
-                pid_value = p - i
+            if abs(own_y_tf) < CTE_CONTROL_DIST:
+                pid_value = p - cte
 
             # publish cmd_vel
             self.cmdvel_publish(steering_ang, translation, pid_value)
@@ -322,10 +322,10 @@ class LookAheadFollowing(Node):
             auto_log_msg.tf_own_y = float(own_y_tf)
             auto_log_msg.cross_track_error = float(-own_y_tf)
             auto_log_msg.kp = KP
-            auto_log_msg.ki = KI
+            auto_log_msg.kcte = KCTE
             auto_log_msg.look_ahead_dist = look_ahead_dist
             auto_log_msg.p = float(p)
-            auto_log_msg.i = float(i)
+            auto_log_msg.cte = float(cte)
             auto_log_msg.steering_ang = float(steering_ang)
             auto_log_msg.linear_x = self.cmdvel.linear.x
             auto_log_msg.angular_z = self.cmdvel.angular.z

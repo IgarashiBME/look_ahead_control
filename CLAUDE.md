@@ -17,7 +17,7 @@ source install/setup.bash
 ros2 run look_ahead_control look_ahead_following
 
 # Run with parameters
-ros2 run look_ahead_control look_ahead_following --ros-args -p Kp:=0.1 -p Ki:=0.01 -p look_ahead:=2.0
+ros2 run look_ahead_control look_ahead_following --ros-args -p Kp:=0.1 -p Kcte:=0.01 -p look_ahead:=2.0
 ```
 
 ## Testing
@@ -52,7 +52,7 @@ No functional unit tests exist yet — only ament linting (flake8, pep257, copyr
 | Pub | `/cmd_vel` | `geometry_msgs/Twist` | linear.x + angular.z velocity command |
 | Pub | `/auto_log` | `bme_common_msgs/AutoLog` | Telemetry: waypoints, CTE, PID values, steering |
 
-**Parameters** (declared on node, dynamically readable each loop): `Kp`, `Ki`, `look_ahead`
+**Parameters** (declared on node, dynamically readable each loop): `Kp`, `Kcte`, `look_ahead`
 
 ### Workspace Context
 
