@@ -1,0 +1,77 @@
+references/qgc_look_ahead.py はROS1(rospy)で書かれたLook-Ahead経路追従制御ノードである。
+これをROS2(rclpy)仕様に書き換えて、本パッケージのスクリプトとして配置してほしい。
+
+### 基本方針
+- Python3、rclpyベースで実装する
+- ノード名は元のまま 'look_ahead_following' とする
+- 出力ファイルはこのパッケージの適切な場所に配置する
+- setup.py(またはsetup.cfg)にconsole_scriptsエントリポイントを追加し、
+  `ros2 run <パッケージ名> look_ahead_following` で実行できるようにする
+
+### ROS1→ROS2 の主な変更点（すべて対応すること）
+
+1. **ノード構造**
+   - rospy.init_node → rclpy.init + Nodeクラス継承
+   - rospy.Rate + while not rospy.is_shutdown → タイマーコールバック、
+     またはwhile rclpy.ok()ループ（元コードのloop()のフロー制御を考慮して適切な方を選ぶ）
+   - rospy.on_shutdown → コンテキストマネージャまたはrclpy.shutdown時の処理
+   - rospy.loginfo → self.get_logger().info()
+   - rospy.Time.now() → self.get_clock().now().to_msg()
+   - time.sleep → 使わず、ROS2のRate.sleep()またはタイマーを使用する
+
+2. **Subscriber / Publisher**
+   - rospy.Subscriber → self.create_subscription
+   - rospy.Publisher → self.create_publisher
+   - queue_size はQoSProfileで設定する
+
+3. **パラメータ**
+   - rospy.get_param → self.declare_parameter + self.get_parameter
+   - Kp, Ki, look_ahead の3パラメータを declare_parameter でデフォルト値付きで宣言する
+   - ループ内で毎回get_parameterしている元の設計を維持し、動的パラメータ変更に対応する
+
+4. **カスタムメッセージ**
+   - 元コードでは以下のカスタムメッセージを使用している：
+     - look_ahead.msg: Auto_Log
+     - mavlink_ajk.msg: MAV_Mission, MAV_Modes
+   - これらは別パッケージで定義される前提とする
+   - ros2_ws/src/bme_common_msgs/msgに適する.msgがあるはずなので参照してください。
+   - import文を ROS2 形式に変更する（例: from look_ahead.msg import AJK_value）
+   - ※メッセージ定義自体の作成は不要（既に別パッケージに存在する想定）
+
+5. **tf関連**
+   - tf.transformations の quaternion_from_euler, euler_from_quaternion, 
+     quaternion_multiply は ROS2 では tf_transformations パッケージを使う
+   - import文: from tf_transformations import quaternion_from_euler 等
+   - package.xml に tf_transformations の依存を追加する
+
+6. **pyproj**
+   - pyproj.Proj はそのまま使用可能
+   - package.xml に python3-pyproj 等の依存メモをコメントで残す
+
+7. **print文**
+   - print "..." → self.get_logger().info("...") に統一する
+   - Python3構文に統一されていることを確認する
+
+### 注意点
+- 元コードのloop()メソッドは状態遷移（ミッション未受信→開始待ち→制御中→完了）を
+  含む長いwhileループである。この制御フローを壊さないように移行すること。
+  タイマーコールバック方式にする場合は状態変数で管理する。
+  whileループ方式にする場合はexecutor/spin_onceとの組み合わせを適切に行う。
+- 元コードのcontinue文やbreak文の挙動が維持されることを確認する
+- numpy の利用はそのまま維持する
+
+### package.xml への依存追加
+以下の依存関係を package.xml に追加すること：
+- rclpy
+- std_msgs
+- nav_msgs
+- sensor_msgs
+- geometry_msgs
+- tf_transformations
+- bme_common_msgs（カスタムメッセージパッケージ）
+
+### 最終確認
+- コード全体がPython3互換であること
+- rospyへの依存が一切残っていないこと
+- setup.pyのエントリポイントが正しく設定されていること
+- package.xmlの依存関係が正しいこと
