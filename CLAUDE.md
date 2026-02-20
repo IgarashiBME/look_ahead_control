@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Package Overview
 
-ROS2 (ament_python) pure-pursuit path-following controller for ground rovers. Ported from `references/qgc_look_ahead.py` (ROS1). Receives GNSS odometry and MAVLink mission waypoints, computes steering via look-ahead distance + PI cross-track error control, and publishes velocity commands.
+ROS2 (ament_python) pure-pursuit path-following controller for ground rovers. Ported from `references/qgc_look_ahead.py` (ROS1). Receives GNSS odometry and MAVLink mission waypoints, computes steering via look-ahead distance + PI cross-track error control, and publishes RC PWM (primary) and velocity commands (derived).
 
 ## Build & Run
 
@@ -17,7 +17,9 @@ source install/setup.bash
 ros2 run look_ahead_control look_ahead_following
 
 # Run with parameters
-ros2 run look_ahead_control look_ahead_following --ros-args -p Kp:=0.1 -p Kcte:=0.01 -p look_ahead:=2.0
+ros2 run look_ahead_control look_ahead_following --ros-args \
+  -p Kp:=0.1 -p Kcte:=0.01 -p look_ahead:=2.0 \
+  -p throttle_scale:=0.5 -p pivot_scale:=0.5 -p driver_mix:=0.0
 ```
 
 ## Testing
@@ -46,23 +48,53 @@ No functional unit tests exist yet — only ament linting (flake8, pep257, copyr
 
 | Direction | Topic | Type | Notes |
 |-----------|-------|------|-------|
-| Sub | `/gnss_odom` | `nav_msgs/Odometry` | Vehicle pose (UTM position + quaternion) |
+| Sub | `/gnss_odom` | `nav_msgs/Odometry` | Vehicle pose (UTM position + quaternion). Used when `odom_source=odom` (default) |
+| Sub | `/gnss` | `bme_common_msgs/GnssSolution` | GNSS solution with UTM + heading. Used when `odom_source=gnss` |
 | Sub | `/mav/mission` | `std_msgs/Float64MultiArray` | `[seq, total_seq, command, lat, lon]` from mavlink_bridge |
 | Sub | `/mav/modes` | `bme_common_msgs/MavModes` | mission_start, base_mode, custom_mode |
-| Pub | `/cmd_vel` | `geometry_msgs/Twist` | linear.x + angular.z velocity command |
+| Pub | `/rc_pwm` | `std_msgs/UInt16MultiArray` | **Primary output.** `[ch1_pwm, ch2_pwm]` — meaning depends on `driver_mix` mode |
+| Pub | `/cmd_vel` | `geometry_msgs/Twist` | Secondary output. linear.x + angular.z derived from PWM values |
 | Pub | `/auto_log` | `bme_common_msgs/AutoLog` | Telemetry: waypoints, CTE, PID values, steering |
 
-**Parameters** (declared on node, dynamically readable each loop): `Kp`, `Kcte`, `look_ahead`
+### Parameters
+
+All parameters are double type for MAVLink GCS (QGroundControl) compatibility. Declared on node, dynamically readable each loop iteration.
+
+**Control:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `Kp` | 0.0 | Proportional gain (steering_ang in degrees) |
+| `Kcte` | 0.0 | Cross-track error gain (lateral offset in meters) |
+| `look_ahead` | 0.0 | Look-ahead distance (m) |
+| `pivot_threshold` | 40.0 | Yaw error threshold for pivot turn (degrees) |
+| `cte_threshold` | 0.1 | Lateral distance threshold to enable CTE correction (m) |
+| `wp_arrival_dist` | 0.1 | Waypoint arrival distance along path axis (m) |
+| `wp_skip_dist` | 0.8 | Skip consecutive waypoints closer than this (m) |
+
+**Output:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `throttle_scale` | 0.5 | Straight-line motor output (0.0–1.0) |
+| `pivot_scale` | 0.5 | Pivot turn motor output (0.0–1.0) |
+| `driver_mix` | 0.0 | 0.0=differential (node mixes L/R), 1.0=passthrough (driver mixes) |
+| `pwm_center` | 1500.0 | PWM center value in microseconds |
+| `pwm_range` | 500.0 | Max PWM deviation from center |
+| `pwm_min` | 1000.0 | PWM safety lower bound |
+| `pwm_max` | 2000.0 | PWM safety upper bound |
+
+**Other:** `odom_source` (string, default `odom`) — selects odometry topic (`odom` → `/gnss_odom`, `gnss` → `/gnss`)
 
 ### Workspace Context
 
 ```
-mavlink_ros2_bridge  →  /mav/mission, /mav/modes  →  look_ahead_control  →  /cmd_vel  →  motor controller
-                     ←  /auto_log                  ←
+mavlink_ros2_bridge  →  /mav/mission, /mav/modes  →  look_ahead_control  →  /rc_pwm   →  motor driver
+                     ←  /auto_log                  ←                      →  /cmd_vel  →  (logging/simulation)
 ```
 
-- **bme_common_msgs**: Message definitions (AutoLog, MavModes) — must be built first
-- **mavlink_ros2_bridge**: QGC↔ROS2 bridge over MAVLink UDP. Publishes mission/modes, subscribes to auto_log. Note: bridge currently expects `Float64MultiArray` on `/auto_log` and needs updating to use `AutoLog`.
+- **bme_common_msgs**: Message definitions (AutoLog, MavModes, GnssSolution) — must be built first
+- **mavlink_ros2_bridge**: QGC↔ROS2 bridge over MAVLink UDP. Publishes mission/modes, subscribes to auto_log. Exposes all control/output parameters to GCS via `paramEntries()`. Note: bridge currently expects `Float64MultiArray` on `/auto_log` and needs updating to use `AutoLog`.
 
 ## Dependencies
 
@@ -73,10 +105,10 @@ mavlink_ros2_bridge  →  /mav/mission, /mav/modes  →  look_ahead_control  →
 
 - `ARDUPILOT_AUTO_BASE = 217` / `ARDUPILOT_AUTO_CUSTOM = 10`: ArduPilot auto-mode identifiers matching mavlink_bridge
 - `MAV_CMD_NAV_WAYPOINT = 16`: MAVLink waypoint command ID
-- `YAW_TOLERANCE = 40.0°`: Threshold for pivot turn vs. PID steering
-- `SPACING = 0.8m`: Minimum distance between consecutive waypoints (skip closer ones)
+- `FORWARD_CONST = 1` / `BACKWARD_CONST = -1`: Translation direction indicators
 
 ## References
 
 - Original ROS1 code: `references/qgc_look_ahead.py`
 - Migration spec (Japanese): `docs/initial_prompt.txt`
+- Control output and parameter relationships (Japanese): `docs/control_output.md`

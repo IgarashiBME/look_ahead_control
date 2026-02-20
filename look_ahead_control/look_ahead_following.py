@@ -250,9 +250,6 @@ class LookAheadFollowing(Node):
     def loop(self):
         rate = self.create_rate(FREQUENCY)
         seq = 1
-        KP = 0.0
-        KCTE = 0.0
-        look_ahead_dist = 0.0
 
         while rclpy.ok():
             # mission checker
