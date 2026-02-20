@@ -14,7 +14,7 @@ from rclpy.qos import QoSProfile
 from pyproj import Proj
 
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Float64MultiArray
+from std_msgs.msg import Float64MultiArray, UInt16MultiArray
 from geometry_msgs.msg import Twist
 
 from bme_common_msgs.msg import AutoLog
@@ -25,21 +25,9 @@ from tf_transformations import quaternion_from_euler
 from tf_transformations import euler_from_quaternion
 from tf_transformations import quaternion_multiply
 
-SPACING = 0.8       # distance between lines
-X_TOLERANCE = 0.1   # [meter]
-YAW_TOLERANCE = 40.0  # [degree]
-
-CTE_CONTROL_DIST = 0.1  # [meter], refer to cross_track_error
-
 # translation value
 FORWARD_CONST = 1
 BACKWARD_CONST = -1
-
-# for simulator or test vehicle
-CMD_LINEAR_OPT = 1.0
-CMD_ANGULAR_RIGHT = 1.0
-CMD_ANGULAR_LEFT = 1.0
-CMD_ANGULAR_LIMIT = 2.0
 
 # frequency [Hz]
 FREQUENCY = 10
@@ -75,6 +63,17 @@ class LookAheadFollowing(Node):
         self.declare_parameter('Kp', 0.0)
         self.declare_parameter('Kcte', 0.0)
         self.declare_parameter('look_ahead', 0.0)
+        self.declare_parameter('pivot_threshold', 40.0)
+        self.declare_parameter('cte_threshold', 0.1)
+        self.declare_parameter('wp_arrival_dist', 0.1)
+        self.declare_parameter('wp_skip_dist', 0.8)
+        self.declare_parameter('throttle_scale', 0.5)
+        self.declare_parameter('pivot_scale', 0.5)
+        self.declare_parameter('driver_mix', 0.0)
+        self.declare_parameter('pwm_center', 1500.0)
+        self.declare_parameter('pwm_range', 500.0)
+        self.declare_parameter('pwm_min', 1000.0)
+        self.declare_parameter('pwm_max', 2000.0)
         self.declare_parameter('odom_source', 'odom')
 
         # Subscribers — select odometry source by parameter
@@ -104,6 +103,9 @@ class LookAheadFollowing(Node):
         # Publishers
         self.auto_log_pub = self.create_publisher(
             AutoLog, '/auto_log', QoSProfile(depth=1))
+
+        self.rc_pwm_pub = self.create_publisher(
+            UInt16MultiArray, '/rc_pwm', QoSProfile(depth=1))
 
         self.cmdvel_pub = self.create_publisher(
             Twist, '/cmd_vel', QoSProfile(depth=1))
@@ -166,23 +168,82 @@ class LookAheadFollowing(Node):
         self.base_mode = msg.base_mode
         self.custom_mode = msg.custom_mode
 
-    def cmdvel_publish(self, steering_ang, translation, pid):
-        if abs(steering_ang) > YAW_TOLERANCE:
-            if steering_ang >= 0:
-                self.cmdvel.linear.x = 0.0
-                self.cmdvel.angular.z = CMD_ANGULAR_LEFT
-            else:
-                self.cmdvel.linear.x = 0.0
-                self.cmdvel.angular.z = CMD_ANGULAR_RIGHT
-        else:
-            self.cmdvel.linear.x = CMD_LINEAR_OPT * translation
-            self.cmdvel.angular.z = pid
+    def control_publish(self, steering_ang, translation, pid):
+        """Compute RC PWM (primary) and derive cmd_vel."""
+        throttle_scale = self.get_parameter(
+            'throttle_scale').get_parameter_value().double_value
+        pivot_scale = self.get_parameter(
+            'pivot_scale').get_parameter_value().double_value
+        pivot_threshold = self.get_parameter(
+            'pivot_threshold').get_parameter_value().double_value
+        driver_mix = self.get_parameter(
+            'driver_mix').get_parameter_value().double_value
 
-        # Angular limit
-        if self.cmdvel.angular.z > CMD_ANGULAR_LIMIT:
-            self.cmdvel.angular.z = CMD_ANGULAR_LIMIT
-        elif self.cmdvel.angular.z < -CMD_ANGULAR_LIMIT:
-            self.cmdvel.angular.z = -CMD_ANGULAR_LIMIT
+        # Compute throttle and steering
+        if abs(steering_ang) > pivot_threshold:
+            # Pivot turn
+            if steering_ang >= 0:
+                throttle = 0.0
+                steering = pivot_scale
+            else:
+                throttle = 0.0
+                steering = -pivot_scale
+        else:
+            # Normal drive
+            throttle = throttle_scale * translation
+            steering = pid
+
+        # Mode-dependent channel assignment
+        if driver_mix >= 0.5:
+            # Passthrough: driver handles mixing
+            # ch1=throttle, ch2=steering
+            ch1 = max(-1.0, min(1.0, throttle))
+            ch2 = max(-1.0, min(1.0, steering))
+        else:
+            # Differential: node mixes into left/right
+            # ch1=left, ch2=right
+            ch1 = max(-1.0, min(1.0, throttle - steering))
+            ch2 = max(-1.0, min(1.0, throttle + steering))
+
+        # PWM parameters
+        pwm_center = self.get_parameter(
+            'pwm_center').get_parameter_value().double_value
+        pwm_range = self.get_parameter(
+            'pwm_range').get_parameter_value().double_value
+        pwm_min = self.get_parameter(
+            'pwm_min').get_parameter_value().double_value
+        pwm_max = self.get_parameter(
+            'pwm_max').get_parameter_value().double_value
+
+        # Map to PWM
+        ch1_pwm = int(pwm_center + ch1 * pwm_range)
+        ch2_pwm = int(pwm_center + ch2 * pwm_range)
+
+        # Safety clamp
+        ch1_pwm = max(int(pwm_min), min(int(pwm_max), ch1_pwm))
+        ch2_pwm = max(int(pwm_min), min(int(pwm_max), ch2_pwm))
+
+        # Publish RC PWM (primary output)
+        rc_msg = UInt16MultiArray()
+        rc_msg.data = [ch1_pwm, ch2_pwm]
+        self.rc_pwm_pub.publish(rc_msg)
+
+        # Derive cmd_vel from PWM (secondary output)
+        if pwm_range != 0:
+            ch1_n = (ch1_pwm - pwm_center) / pwm_range
+            ch2_n = (ch2_pwm - pwm_center) / pwm_range
+        else:
+            ch1_n = 0.0
+            ch2_n = 0.0
+
+        if driver_mix >= 0.5:
+            # Passthrough: ch1=throttle, ch2=steering
+            self.cmdvel.linear.x = ch1_n
+            self.cmdvel.angular.z = ch2_n
+        else:
+            # Differential: ch1=left, ch2=right
+            self.cmdvel.linear.x = (ch1_n + ch2_n) / 2.0
+            self.cmdvel.angular.z = (ch2_n - ch1_n) / 2.0
 
         self.cmdvel_pub.publish(self.cmdvel)
 
@@ -226,6 +287,12 @@ class LookAheadFollowing(Node):
             KCTE = self.get_parameter('Kcte').get_parameter_value().double_value
             look_ahead_dist = self.get_parameter(
                 'look_ahead').get_parameter_value().double_value
+            cte_threshold = self.get_parameter(
+                'cte_threshold').get_parameter_value().double_value
+            wp_arrival_dist = self.get_parameter(
+                'wp_arrival_dist').get_parameter_value().double_value
+            wp_skip_dist = self.get_parameter(
+                'wp_skip_dist').get_parameter_value().double_value
 
             # waypoint with xy coordinate origin adjust
             if seq == 0:
@@ -296,11 +363,11 @@ class LookAheadFollowing(Node):
             cte = KCTE * own_y_tf
 
             pid_value = p
-            if abs(own_y_tf) < CTE_CONTROL_DIST:
+            if abs(own_y_tf) < cte_threshold:
                 pid_value = p - cte
 
-            # publish cmd_vel
-            self.cmdvel_publish(steering_ang, translation, pid_value)
+            # publish rc_pwm (primary) and cmd_vel (derived)
+            self.control_publish(steering_ang, translation, pid_value)
 
             # publish auto_log
             auto_log_msg = AutoLog()
@@ -332,7 +399,7 @@ class LookAheadFollowing(Node):
             self.auto_log_pub.publish(auto_log_msg)
 
             # when reaching the look-ahead distance, read the next waypoint
-            if (wp_x_tf - own_x_tf) < X_TOLERANCE:
+            if (wp_x_tf - own_x_tf) < wp_arrival_dist:
                 pre_wp_x = self.waypoint_x[seq]
                 pre_wp_y = self.waypoint_y[seq]
                 seq = seq + 1
@@ -341,12 +408,18 @@ class LookAheadFollowing(Node):
                     b = np.array([self.waypoint_x[seq],
                                   self.waypoint_y[seq]])
 
-                    if np.linalg.norm(a - b) < SPACING:
+                    if np.linalg.norm(a - b) < wp_skip_dist:
                         seq = seq + 1
                 except IndexError:
                     pass
 
             if seq >= len(self.waypoint_x):
+                # Stop: publish neutral PWM
+                pwm_center = int(self.get_parameter(
+                    'pwm_center').get_parameter_value().double_value)
+                rc_stop = UInt16MultiArray()
+                rc_stop.data = [pwm_center, pwm_center]
+                self.rc_pwm_pub.publish(rc_stop)
                 self.cmdvel.linear.x = 0.0
                 self.cmdvel.angular.z = 0.0
                 self.cmdvel_pub.publish(self.cmdvel)
