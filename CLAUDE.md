@@ -86,6 +86,15 @@ All parameters are double type for MAVLink GCS (QGroundControl) compatibility. D
 
 **Other:** `odom_source` (string, default `odom`) — selects odometry topic (`odom` → `/gnss_odom`, `gnss` → `/gnss`)
 
+### Parameter Sync from QGC
+
+QGC writes parameters to mavlink_ros2_bridge only (via MAVLink PARAM_SET). This node syncs those parameters through two mechanisms:
+
+1. **Startup load:** `_load_bridge_params()` reads `~/.ros/mavlink_bridge_params.yaml` (bridge's persistence file) and applies matching parameters
+2. **Runtime sync:** Subscribes to `/parameter_events` and mirrors changes from `/mavlink_bridge_node` to local parameters
+
+When adding new parameters to this node, also add them to the bridge's `paramEntries()` so QGC can set them.
+
 ### Workspace Context
 
 ```
@@ -94,7 +103,7 @@ mavlink_ros2_bridge  →  /mav/mission, /mav/modes  →  look_ahead_control  →
 ```
 
 - **bme_common_msgs**: Message definitions (AutoLog, MavModes, GnssSolution) — must be built first
-- **mavlink_ros2_bridge**: QGC↔ROS2 bridge over MAVLink UDP. Publishes mission/modes, subscribes to auto_log. Exposes all control/output parameters to GCS via `paramEntries()`. Note: bridge currently expects `Float64MultiArray` on `/auto_log` and needs updating to use `AutoLog`.
+- **mavlink_ros2_bridge**: QGC↔ROS2 bridge over MAVLink UDP. Publishes mission/modes, subscribes to auto_log. Exposes all control/output parameters to GCS via `paramEntries()`. Parameters persist to `~/.ros/mavlink_bridge_params.yaml`.
 
 ## Dependencies
 

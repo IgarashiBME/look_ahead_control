@@ -4,6 +4,7 @@
 Ported from references/qgc_look_ahead.py (ROS1).
 """
 
+import os
 import threading
 
 import numpy as np
@@ -17,6 +18,7 @@ from nav_msgs.msg import Odometry
 from std_msgs.msg import Float64MultiArray, UInt16MultiArray
 from geometry_msgs.msg import Twist
 
+from rcl_interfaces.msg import ParameterEvent
 from bme_common_msgs.msg import AutoLog
 from bme_common_msgs.msg import GnssSolution
 from bme_common_msgs.msg import MavModes
@@ -82,9 +84,9 @@ class LookAheadFollowing(Node):
 
         if odom_source == 'gnss':
             self.create_subscription(
-                GnssSolution, '/gnss', self.gnss_callback,
+                GnssSolution, '/gnss/solution', self.gnss_callback,
                 QoSProfile(depth=1))
-            self.get_logger().info("odom_source: /gnss (GnssSolution)")
+            self.get_logger().info("odom_source: /gnss/solution (GnssSolution)")
         else:
             self.create_subscription(
                 Odometry, '/gnss_odom', self.odom_callback,
@@ -110,6 +112,14 @@ class LookAheadFollowing(Node):
         self.cmdvel_pub = self.create_publisher(
             Twist, '/cmd_vel', QoSProfile(depth=1))
         self.cmdvel = Twist()
+
+        # Sync parameters from mavlink_bridge_node (QGC PARAM_SET)
+        self.create_subscription(
+            ParameterEvent, '/parameter_events',
+            self.param_event_callback, QoSProfile(depth=10))
+
+        # Load saved QGC parameters at startup
+        self._load_bridge_params()
 
     def odom_callback(self, msg):
         self.x = msg.pose.pose.position.x
@@ -163,10 +173,58 @@ class LookAheadFollowing(Node):
         self.waypoint_x.append(x)
         self.waypoint_y.append(y)
 
+        self.get_logger().info(
+            f"WP {seq}/{total_seq} cmd={command} "
+            f"lat={latitude:.7f} lon={longitude:.7f} "
+            f"UTM=({x:.2f}, {y:.2f})")
+
+    def _load_bridge_params(self):
+        """Load saved QGC parameters from mavlink_bridge's persistence file."""
+        from rclpy.parameter import Parameter
+        path = os.path.expanduser('~/.ros/mavlink_bridge_params.yaml')
+        if not os.path.exists(path):
+            return
+        try:
+            with open(path) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or ':' not in line:
+                        continue
+                    key, val_str = line.split(':', 1)
+                    key = key.strip()
+                    val_str = val_str.strip()
+                    if self.has_parameter(key):
+                        self.set_parameters([Parameter(
+                            key, Parameter.Type.DOUBLE, float(val_str))])
+                        self.get_logger().info(
+                            f"param load: {key}={float(val_str)}")
+        except Exception as e:
+            self.get_logger().warn(f"Failed to load bridge params: {e}")
+
+    def param_event_callback(self, msg):
+        """Sync parameter changes from mavlink_bridge_node."""
+        if msg.node != '/mavlink_bridge_node':
+            return
+        from rclpy.parameter import Parameter
+        for param in msg.changed_parameters:
+            if self.has_parameter(param.name):
+                try:
+                    self.set_parameters([Parameter(
+                        param.name, Parameter.Type.DOUBLE,
+                        param.value.double_value)])
+                    self.get_logger().info(
+                        f"param sync: {param.name}={param.value.double_value}")
+                except Exception:
+                    pass
+
     def mav_modes_callback(self, msg):
         self.mission_start = msg.mission_start
         self.base_mode = msg.base_mode
         self.custom_mode = msg.custom_mode
+        self.get_logger().info(
+            f"mav_modes: base={msg.base_mode} custom={msg.custom_mode} "
+            f"start={msg.mission_start}",
+            throttle_duration_sec=2.0)
 
     def control_publish(self, steering_ang, translation, pid):
         """Compute RC PWM (primary) and derive cmd_vel."""
@@ -261,9 +319,8 @@ class LookAheadFollowing(Node):
                 rate.sleep()
                 continue
 
-            # mission_start checker (origin from MAV_CMD_MISSION_START)
-            if not self.mission_start \
-                    or self.base_mode != ARDUPILOT_AUTO_BASE \
+            # mission_start checker (AUTO mode + ARM)
+            if self.base_mode != ARDUPILOT_AUTO_BASE \
                     or self.custom_mode != ARDUPILOT_AUTO_CUSTOM:
                 self.get_logger().info(
                     "mission_start_checker", throttle_duration_sec=1.0)
@@ -274,8 +331,10 @@ class LookAheadFollowing(Node):
             try:
                 own_x = self.x
                 own_y = self.y
-                front_q = self.q.copy()
-            except AttributeError:
+                front_q = np.array(self.q, dtype=float)
+            except AttributeError as e:
+                self.get_logger().warn(
+                    f"AttributeError: {e}", throttle_duration_sec=1.0)
                 rate.sleep()
                 continue
 
@@ -348,6 +407,11 @@ class LookAheadFollowing(Node):
             rear_steering_ang = (
                 euler_from_quaternion(rear_steering_q)[2] / np.pi * 180)
 
+            self.get_logger().info(
+                f"front={front_steering_ang:.1f} rear={rear_steering_ang:.1f}"
+                f" yaw={euler_from_quaternion(front_q)[2]/np.pi*180:.1f}"
+                f" tf_ang={tf_angle/np.pi*180:.1f}",
+                throttle_duration_sec=0.5)
             if abs(front_steering_ang) >= abs(rear_steering_ang):
                 steering_ang = rear_steering_ang
                 translation = BACKWARD_CONST

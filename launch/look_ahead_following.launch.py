@@ -59,7 +59,7 @@ def generate_launch_description():
         DeclareLaunchArgument('pwm_max', default_value='2000.0'),
 
         # Other parameters
-        DeclareLaunchArgument('odom_source', default_value='odom'),
+        DeclareLaunchArgument('odom_source', default_value='gnss'),
 
         Node(
             package='look_ahead_control',
