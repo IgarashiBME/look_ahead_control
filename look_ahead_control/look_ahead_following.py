@@ -475,18 +475,39 @@ class LookAheadFollowing(Node):
                     pass
 
             if seq >= len(self.waypoint_x):
-                # Stop: publish neutral PWM
-                pwm_center = int(self.get_parameter(
-                    'pwm_center').get_parameter_value().double_value)
-                rc_stop = UInt16MultiArray()
-                rc_stop.data = [pwm_center, pwm_center]
-                self.rc_pwm_pub.publish(rc_stop)
-                self.cmdvel.linear.x = 0.0
-                self.cmdvel.angular.z = 0.0
-                self.cmdvel_pub.publish(self.cmdvel)
+                self.get_logger().info("mission_end — waiting for disarm")
+                # Send stop + disarm trigger until bridge confirms disarm
+                while rclpy.ok():
+                    # Neutral PWM
+                    pwm_center = int(self.get_parameter(
+                        'pwm_center').get_parameter_value().double_value)
+                    rc_stop = UInt16MultiArray()
+                    rc_stop.data = [pwm_center, pwm_center]
+                    self.rc_pwm_pub.publish(rc_stop)
+                    self.cmdvel.linear.x = 0.0
+                    self.cmdvel.angular.z = 0.0
+                    self.cmdvel_pub.publish(self.cmdvel)
+
+                    # Trigger bridge auto-disarm
+                    auto_log_msg = AutoLog()
+                    auto_log_msg.stamp = self.get_clock().now().to_msg()
+                    auto_log_msg.waypoint_seq = self.waypoint_total_seq + 1
+                    self.auto_log_pub.publish(auto_log_msg)
+
+                    # Wait until bridge publishes disarmed state
+                    if self.base_mode != ARDUPILOT_AUTO_BASE:
+                        break
+                    rate.sleep()
+
+                # Reset bridge current_seq to avoid immediate re-disarm
+                auto_log_msg = AutoLog()
+                auto_log_msg.stamp = self.get_clock().now().to_msg()
+                auto_log_msg.waypoint_seq = 0
+                self.auto_log_pub.publish(auto_log_msg)
+
+                self.get_logger().info("disarmed — ready for re-arm")
                 seq = 1
-                self.get_logger().info("mission_end")
-                break
+                continue
 
             rate.sleep()
 
