@@ -64,6 +64,7 @@ class LookAheadFollowing(Node):
         # Declare parameters with defaults
         self.declare_parameter('Kp', 0.0)
         self.declare_parameter('Kcte', 0.0)
+        self.declare_parameter('Kd', 0.0)
         self.declare_parameter('look_ahead', 0.0)
         self.declare_parameter('pivot_threshold', 40.0)
         self.declare_parameter('cte_threshold', 0.1)
@@ -416,10 +417,13 @@ class LookAheadFollowing(Node):
             # calculate the steering value
             p = KP * steering_ang
             cte = KCTE * own_y_tf
+            KD = self.get_parameter('Kd').get_parameter_value().double_value
+            d = KD * (steering_ang - self.pre_steering_ang)
+            self.pre_steering_ang = steering_ang
 
-            pid_value = p
+            pid_value = p + d
             if abs(own_y_tf) < cte_threshold:
-                pid_value = p - cte
+                pid_value = p + d - cte
 
             # publish rc_pwm (primary) and cmd_vel (derived)
             self.control_publish(steering_ang, translation, pid_value)
@@ -448,6 +452,8 @@ class LookAheadFollowing(Node):
             auto_log_msg.look_ahead_dist = look_ahead_dist
             auto_log_msg.p = float(p)
             auto_log_msg.cte = float(cte)
+            auto_log_msg.kd = KD
+            auto_log_msg.d = float(d)
             auto_log_msg.steering_ang = float(steering_ang)
             auto_log_msg.linear_x = self.cmdvel.linear.x
             auto_log_msg.angular_z = self.cmdvel.angular.z
