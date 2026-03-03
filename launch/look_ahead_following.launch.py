@@ -34,7 +34,7 @@ def generate_launch_description():
             'rc_pwm_topic', default_value='/rc_pwm',
             description='RC PWM output topic'),
         DeclareLaunchArgument(
-            'cmd_vel_topic', default_value='/cmd_vel',
+            'cmd_vel_topic', default_value='/sim_cmd_vel',
             description='Velocity command output topic'),
         DeclareLaunchArgument(
             'auto_log_topic', default_value='/auto_log',

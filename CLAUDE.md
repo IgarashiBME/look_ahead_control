@@ -83,6 +83,7 @@ All parameters are double type for MAVLink GCS (QGroundControl) compatibility. D
 | `pwm_range` | 500.0 | Max PWM deviation from center |
 | `pwm_min` | 1000.0 | PWM safety lower bound |
 | `pwm_max` | 2000.0 | PWM safety upper bound |
+| `steering_reverse` | 0.0 | 0.0=normal, 1.0=reverse steering in rc_pwm (passthrough mode only) |
 
 **Other:** `odom_source` (string, default `odom`) — selects odometry topic (`odom` → `/gnss_odom`, `gnss` → `/gnss`)
 

@@ -76,6 +76,7 @@ class LookAheadFollowing(Node):
         self.declare_parameter('pwm_range', 500.0)
         self.declare_parameter('pwm_min', 1000.0)
         self.declare_parameter('pwm_max', 2000.0)
+        self.declare_parameter('steering_reverse', 0.0)
         self.declare_parameter('odom_source', 'odom')
 
         # Subscribers — select odometry source by parameter
@@ -227,7 +228,7 @@ class LookAheadFollowing(Node):
             throttle_duration_sec=2.0)
 
     def control_publish(self, steering_ang, translation, pid):
-        """Compute RC PWM (primary) and derive cmd_vel."""
+        """Compute cmd_vel and RC PWM independently from control values."""
         throttle_scale = self.get_parameter(
             'throttle_scale').get_parameter_value().double_value
         pivot_scale = self.get_parameter(
@@ -251,12 +252,21 @@ class LookAheadFollowing(Node):
             throttle = throttle_scale * translation
             steering = pid
 
-        # Mode-dependent channel assignment
+        # cmd_vel: computed directly from control values (ROS convention)
+        self.cmdvel.linear.x = float(throttle)
+        self.cmdvel.angular.z = float(steering)
+        self.cmdvel_pub.publish(self.cmdvel)
+
+        # rc_pwm: hardware-specific channel assignment
+        steering_reverse = self.get_parameter(
+            'steering_reverse').get_parameter_value().double_value
+        steer_sign = -1.0 if steering_reverse >= 0.5 else 1.0
+
         if driver_mix >= 0.5:
             # Passthrough: driver handles mixing
             # ch1=throttle, ch2=steering
             ch1 = max(-1.0, min(1.0, throttle))
-            ch2 = max(-1.0, min(1.0, steering))
+            ch2 = max(-1.0, min(1.0, steer_sign * steering))
         else:
             # Differential: node mixes into left/right
             # ch1=left, ch2=right
@@ -285,25 +295,6 @@ class LookAheadFollowing(Node):
         rc_msg = UInt16MultiArray()
         rc_msg.data = [ch1_pwm, ch2_pwm]
         self.rc_pwm_pub.publish(rc_msg)
-
-        # Derive cmd_vel from PWM (secondary output)
-        if pwm_range != 0:
-            ch1_n = (ch1_pwm - pwm_center) / pwm_range
-            ch2_n = (ch2_pwm - pwm_center) / pwm_range
-        else:
-            ch1_n = 0.0
-            ch2_n = 0.0
-
-        if driver_mix >= 0.5:
-            # Passthrough: ch1=throttle, ch2=steering
-            self.cmdvel.linear.x = ch1_n
-            self.cmdvel.angular.z = ch2_n
-        else:
-            # Differential: ch1=left, ch2=right
-            self.cmdvel.linear.x = (ch1_n + ch2_n) / 2.0
-            self.cmdvel.angular.z = (ch2_n - ch1_n) / 2.0
-
-        self.cmdvel_pub.publish(self.cmdvel)
 
     def loop(self):
         rate = self.create_rate(FREQUENCY)
@@ -418,6 +409,9 @@ class LookAheadFollowing(Node):
             elif abs(front_steering_ang) < abs(rear_steering_ang):
                 steering_ang = front_steering_ang
                 translation = FORWARD_CONST
+                
+            steering_ang = front_steering_ang
+            translation = FORWARD_CONST
 
             # calculate the steering value
             p = KP * steering_ang
