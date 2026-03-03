@@ -54,7 +54,7 @@ class LookAheadFollowing(Node):
         self.y = 0.0
         self.q = np.empty(4)
         self.yaw = np.pi / 2
-        self.pre_steering_ang = 0.0
+        self.prev_relative_bearing = 0.0
 
         # mav_modes
         self.mission_start = False
@@ -230,7 +230,7 @@ class LookAheadFollowing(Node):
             f"start={msg.mission_start}",
             throttle_duration_sec=2.0)
 
-    def control_publish(self, steering_ang, translation, pid):
+    def control_publish(self, relative_bearing, translation, pid):
         """Compute cmd_vel and RC PWM independently from control values."""
         throttle_range = self.get_parameter(
             'throttle_range').get_parameter_value().double_value
@@ -242,10 +242,10 @@ class LookAheadFollowing(Node):
             'driver_mix').get_parameter_value().double_value
 
         # Compute throttle and steering PWM deviation (us)
-        if abs(steering_ang) > pivot_threshold:
+        if abs(relative_bearing) > pivot_threshold:
             # Pivot turn
             throttle = 0.0
-            steering_us = pivot_range if steering_ang >= 0 else -pivot_range
+            steering_us = pivot_range if relative_bearing >= 0 else -pivot_range
         else:
             # Normal drive: pid is directly in us
             throttle = float(translation)
@@ -258,10 +258,10 @@ class LookAheadFollowing(Node):
             'cmd_vel_steer_scale').get_parameter_value().double_value
         cmd_vel_pivot_rate = self.get_parameter(
             'cmd_vel_pivot_rate').get_parameter_value().double_value
-        if abs(steering_ang) > pivot_threshold:
+        if abs(relative_bearing) > pivot_threshold:
             self.cmdvel.linear.x = 0.0
             self.cmdvel.angular.z = cmd_vel_pivot_rate \
-                if steering_ang >= 0 else -cmd_vel_pivot_rate
+                if relative_bearing >= 0 else -cmd_vel_pivot_rate
         else:
             self.cmdvel.linear.x = cmd_vel_speed * float(translation)
             self.cmdvel.angular.z = float(steering_us * cmd_vel_steer_scale)
@@ -327,8 +327,8 @@ class LookAheadFollowing(Node):
 
             # if a specific variable exists, proceed
             try:
-                own_x = self.x
-                own_y = self.y
+                pose_x = self.x
+                pose_y = self.y
                 front_q = np.array(self.q, dtype=float)
             except AttributeError as e:
                 self.get_logger().warn(
@@ -337,8 +337,8 @@ class LookAheadFollowing(Node):
                 continue
 
             # get the parameters of look-ahead control
-            KP = self.get_parameter('Kp').get_parameter_value().double_value
-            KCTE = self.get_parameter('Kcte').get_parameter_value().double_value
+            kp = self.get_parameter('Kp').get_parameter_value().double_value
+            kcte = self.get_parameter('Kcte').get_parameter_value().double_value
             look_ahead_dist = self.get_parameter(
                 'look_ahead').get_parameter_value().double_value
             cte_threshold = self.get_parameter(
@@ -350,15 +350,15 @@ class LookAheadFollowing(Node):
 
             # waypoint with xy coordinate origin adjust
             if seq == 0:
-                wp_x_adj = self.waypoint_x[seq] - own_x
-                wp_y_adj = self.waypoint_y[seq] - own_y
-                own_x_adj = 0.0
-                own_y_adj = 0.0
+                wp_x_adj = self.waypoint_x[seq] - pose_x
+                wp_y_adj = self.waypoint_y[seq] - pose_y
+                pose_x_adj = 0.0
+                pose_y_adj = 0.0
             else:
                 wp_x_adj = self.waypoint_x[seq] - self.waypoint_x[seq - 1]
                 wp_y_adj = self.waypoint_y[seq] - self.waypoint_y[seq - 1]
-                own_x_adj = own_x - self.waypoint_x[seq - 1]
-                own_y_adj = own_y - self.waypoint_y[seq - 1]
+                pose_x_adj = pose_x - self.waypoint_x[seq - 1]
+                pose_y_adj = pose_y - self.waypoint_y[seq - 1]
 
             # coordinate transformation of waypoint
             tf_angle = np.arctan2(wp_y_adj, wp_x_adj)
@@ -368,10 +368,10 @@ class LookAheadFollowing(Node):
                        + wp_y_adj * np.cos(-tf_angle))
 
             # coordinate transformation of own position
-            own_x_tf = (own_x_adj * np.cos(-tf_angle)
-                        - own_y_adj * np.sin(-tf_angle))
-            own_y_tf = (own_x_adj * np.sin(-tf_angle)
-                        + own_y_adj * np.cos(-tf_angle))
+            pose_x_tf = (pose_x_adj * np.cos(-tf_angle)
+                         - pose_y_adj * np.sin(-tf_angle))
+            pose_y_tf = (pose_x_adj * np.sin(-tf_angle)
+                         + pose_y_adj * np.cos(-tf_angle))
 
             # coordinate transformation of own orientation
             tf_q = quaternion_from_euler(0, 0, tf_angle)
@@ -387,7 +387,7 @@ class LookAheadFollowing(Node):
             rear_q_tf[3] = -front_q_tf[2]
 
             # calculate the target-angle (bearing) using look-ahead distance
-            bearing = np.arctan2(-own_y_tf, look_ahead_dist)
+            bearing = np.arctan2(-pose_y_tf, look_ahead_dist)
             bearing_q = quaternion_from_euler(0, 0, bearing)
 
             # calculate the minimal yaw error, and decide forward or backward
@@ -400,39 +400,39 @@ class LookAheadFollowing(Node):
                 (rear_q_tf[0], rear_q_tf[1], rear_q_tf[2],
                  -rear_q_tf[3]))
 
-            front_steering_ang = (
+            front_relative_bearing = (
                 euler_from_quaternion(front_steering_q)[2] / np.pi * 180)
-            rear_steering_ang = (
+            rear_relative_bearing = (
                 euler_from_quaternion(rear_steering_q)[2] / np.pi * 180)
 
             self.get_logger().info(
-                f"front={front_steering_ang:.1f} rear={rear_steering_ang:.1f}"
+                f"front={front_relative_bearing:.1f} rear={rear_relative_bearing:.1f}"
                 f" yaw={euler_from_quaternion(front_q)[2]/np.pi*180:.1f}"
                 f" tf_ang={tf_angle/np.pi*180:.1f}",
                 throttle_duration_sec=0.5)
-            if abs(front_steering_ang) >= abs(rear_steering_ang):
-                steering_ang = rear_steering_ang
+            if abs(front_relative_bearing) >= abs(rear_relative_bearing):
+                relative_bearing = rear_relative_bearing
                 translation = BACKWARD_CONST
-            elif abs(front_steering_ang) < abs(rear_steering_ang):
-                steering_ang = front_steering_ang
+            elif abs(front_relative_bearing) < abs(rear_relative_bearing):
+                relative_bearing = front_relative_bearing
                 translation = FORWARD_CONST
-                
-            steering_ang = front_steering_ang
+
+            relative_bearing = front_relative_bearing
             translation = FORWARD_CONST
 
             # calculate the steering value
-            p = KP * steering_ang
-            cte = KCTE * own_y_tf
-            KD = self.get_parameter('Kd').get_parameter_value().double_value
-            d = KD * (steering_ang - self.pre_steering_ang)
-            self.pre_steering_ang = steering_ang
+            p_output = kp * relative_bearing
+            cte_output = kcte * pose_y_tf
+            kd = self.get_parameter('Kd').get_parameter_value().double_value
+            d_output = kd * (relative_bearing - self.prev_relative_bearing)
+            self.prev_relative_bearing = relative_bearing
 
-            pid_value = p + d
-            if abs(own_y_tf) < cte_threshold:
-                pid_value = p + d - cte
+            pid_value = p_output + d_output
+            if abs(pose_y_tf) < cte_threshold:
+                pid_value = p_output + d_output - cte_output
 
             # publish rc_pwm (primary) and cmd_vel (derived)
-            self.control_publish(steering_ang, translation, pid_value)
+            self.control_publish(relative_bearing, translation, pid_value)
 
             # publish auto_log
             auto_log_msg = AutoLog()
@@ -444,29 +444,29 @@ class LookAheadFollowing(Node):
                 self.waypoint_y[seq - 1] if seq > 0 else 0.0
             auto_log_msg.waypoint_end_x = self.waypoint_x[seq]
             auto_log_msg.waypoint_end_y = self.waypoint_y[seq]
-            auto_log_msg.own_x = own_x
-            auto_log_msg.own_y = own_y
-            auto_log_msg.own_yaw = float(
+            auto_log_msg.pose_x = pose_x
+            auto_log_msg.pose_y = pose_y
+            auto_log_msg.pose_yaw = float(
                 euler_from_quaternion(front_q)[2] / np.pi * 180)
             auto_log_msg.tf_waypoint_x = float(wp_x_tf)
             auto_log_msg.tf_waypoint_y = float(wp_y_tf)
-            auto_log_msg.tf_own_x = float(own_x_tf)
-            auto_log_msg.tf_own_y = float(own_y_tf)
-            auto_log_msg.cross_track_error = float(-own_y_tf)
-            auto_log_msg.kp = KP
-            auto_log_msg.kcte = KCTE
+            auto_log_msg.tf_pose_x = float(pose_x_tf)
+            auto_log_msg.tf_pose_y = float(pose_y_tf)
+            auto_log_msg.cross_track_error = float(-pose_y_tf)
+            auto_log_msg.kp = kp
+            auto_log_msg.kcte = kcte
             auto_log_msg.look_ahead_dist = look_ahead_dist
-            auto_log_msg.p = float(p)
-            auto_log_msg.cte = float(cte)
-            auto_log_msg.kd = KD
-            auto_log_msg.d = float(d)
-            auto_log_msg.steering_ang = float(steering_ang)
+            auto_log_msg.p_output = float(p_output)
+            auto_log_msg.cte_output = float(cte_output)
+            auto_log_msg.kd = kd
+            auto_log_msg.d_output = float(d_output)
+            auto_log_msg.relative_bearing = float(relative_bearing)
             auto_log_msg.linear_x = self.cmdvel.linear.x
             auto_log_msg.angular_z = self.cmdvel.angular.z
             self.auto_log_pub.publish(auto_log_msg)
 
             # when reaching the look-ahead distance, read the next waypoint
-            if (wp_x_tf - own_x_tf) < wp_arrival_dist:
+            if (wp_x_tf - pose_x_tf) < wp_arrival_dist:
                 pre_wp_x = self.waypoint_x[seq]
                 pre_wp_y = self.waypoint_y[seq]
                 seq = seq + 1
