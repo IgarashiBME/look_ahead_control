@@ -55,6 +55,8 @@ class LookAheadFollowing(Node):
         self.q = np.empty(4)
         self.yaw = np.pi / 2
         self.prev_relative_bearing = 0.0
+        self.ch1_pwm = 1500
+        self.ch2_pwm = 1500
 
         # mav_modes
         self.mission_start = False
@@ -303,6 +305,10 @@ class LookAheadFollowing(Node):
         rc_msg.data = [ch1_pwm, ch2_pwm]
         self.rc_pwm_pub.publish(rc_msg)
 
+        # Store for AutoLog
+        self.ch1_pwm = ch1_pwm
+        self.ch2_pwm = ch2_pwm
+
     def loop(self):
         rate = self.create_rate(FREQUENCY)
         seq = 1
@@ -463,6 +469,8 @@ class LookAheadFollowing(Node):
             auto_log_msg.relative_bearing = float(relative_bearing)
             auto_log_msg.linear_x = self.cmdvel.linear.x
             auto_log_msg.angular_z = self.cmdvel.angular.z
+            auto_log_msg.ch1_pwm = self.ch1_pwm
+            auto_log_msg.ch2_pwm = self.ch2_pwm
             self.auto_log_pub.publish(auto_log_msg)
 
             # when reaching the look-ahead distance, read the next waypoint
