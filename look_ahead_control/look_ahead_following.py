@@ -71,7 +71,6 @@ class LookAheadFollowing(Node):
         self.declare_parameter('wp_arrival_dist', 0.1)
         self.declare_parameter('wp_skip_dist', 0.8)
         self.declare_parameter('throttle_range', 250.0)
-        self.declare_parameter('steering_range', 500.0)
         self.declare_parameter('pivot_range', 250.0)
         self.declare_parameter('driver_mix', 0.0)
         self.declare_parameter('pwm_center', 1500.0)
@@ -232,8 +231,6 @@ class LookAheadFollowing(Node):
         """Compute cmd_vel and RC PWM independently from control values."""
         throttle_range = self.get_parameter(
             'throttle_range').get_parameter_value().double_value
-        steering_range = self.get_parameter(
-            'steering_range').get_parameter_value().double_value
         pivot_range = self.get_parameter(
             'pivot_range').get_parameter_value().double_value
         pivot_threshold = self.get_parameter(
@@ -241,21 +238,19 @@ class LookAheadFollowing(Node):
         driver_mix = self.get_parameter(
             'driver_mix').get_parameter_value().double_value
 
-        # Compute throttle, steering, and effective steering range
+        # Compute throttle and steering PWM deviation (us)
         if abs(steering_ang) > pivot_threshold:
             # Pivot turn
             throttle = 0.0
-            steering = 1.0 if steering_ang >= 0 else -1.0
-            eff_steer_range = pivot_range
+            steering_us = pivot_range if steering_ang >= 0 else -pivot_range
         else:
-            # Normal drive
+            # Normal drive: pid is directly in us
             throttle = float(translation)
-            steering = pid
-            eff_steer_range = steering_range
+            steering_us = pid
 
         # cmd_vel: computed directly from control values (ROS convention)
         self.cmdvel.linear.x = float(throttle)
-        self.cmdvel.angular.z = float(steering)
+        self.cmdvel.angular.z = float(steering_us)
         self.cmdvel_pub.publish(self.cmdvel)
 
         # rc_pwm: hardware-specific channel assignment
@@ -275,15 +270,15 @@ class LookAheadFollowing(Node):
             ch1_pwm = int(pwm_center
                           + throttle * throttle_range)
             ch2_pwm = int(pwm_center
-                          + steer_sign * steering * eff_steer_range)
+                          + steer_sign * steering_us)
         else:
             # Differential: ch1=left, ch2=right
             ch1_pwm = int(pwm_center
                           + throttle * throttle_range
-                          - steering * eff_steer_range)
+                          - steering_us)
             ch2_pwm = int(pwm_center
                           + throttle * throttle_range
-                          + steering * eff_steer_range)
+                          + steering_us)
 
         # Safety clamp
         ch1_pwm = max(int(pwm_min), min(int(pwm_max), ch1_pwm))
