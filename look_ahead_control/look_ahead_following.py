@@ -77,6 +77,9 @@ class LookAheadFollowing(Node):
         self.declare_parameter('pwm_min', 1000.0)
         self.declare_parameter('pwm_max', 2000.0)
         self.declare_parameter('steering_reverse', 0.0)
+        self.declare_parameter('cmd_vel_speed', 0.5)
+        self.declare_parameter('cmd_vel_steer_scale', 0.002)
+        self.declare_parameter('cmd_vel_pivot_rate', 0.5)
         self.declare_parameter('odom_source', 'odom')
 
         # Subscribers — select odometry source by parameter
@@ -248,9 +251,20 @@ class LookAheadFollowing(Node):
             throttle = float(translation)
             steering_us = pid
 
-        # cmd_vel: computed directly from control values (ROS convention)
-        self.cmdvel.linear.x = float(throttle)
-        self.cmdvel.angular.z = float(steering_us)
+        # cmd_vel: independent computation for simulation
+        cmd_vel_speed = self.get_parameter(
+            'cmd_vel_speed').get_parameter_value().double_value
+        cmd_vel_steer_scale = self.get_parameter(
+            'cmd_vel_steer_scale').get_parameter_value().double_value
+        cmd_vel_pivot_rate = self.get_parameter(
+            'cmd_vel_pivot_rate').get_parameter_value().double_value
+        if abs(steering_ang) > pivot_threshold:
+            self.cmdvel.linear.x = 0.0
+            self.cmdvel.angular.z = cmd_vel_pivot_rate \
+                if steering_ang >= 0 else -cmd_vel_pivot_rate
+        else:
+            self.cmdvel.linear.x = cmd_vel_speed * float(translation)
+            self.cmdvel.angular.z = float(steering_us * cmd_vel_steer_scale)
         self.cmdvel_pub.publish(self.cmdvel)
 
         # rc_pwm: hardware-specific channel assignment
