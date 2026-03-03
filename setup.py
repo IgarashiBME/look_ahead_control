@@ -29,6 +29,7 @@ setup(
     entry_points={
         'console_scripts': [
             'look_ahead_following = look_ahead_control.look_ahead_following:main',
+            'rosbag_recorder = look_ahead_control.rosbag_recorder_node:main',
         ],
     },
 )

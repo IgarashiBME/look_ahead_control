@@ -2,6 +2,7 @@
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -34,11 +35,22 @@ def generate_launch_description():
             'rc_pwm_topic', default_value='/rc_pwm',
             description='RC PWM output topic'),
         DeclareLaunchArgument(
-            'cmd_vel_topic', default_value='/sim_cmd_vel',
+            'cmd_vel_topic', default_value='/cmd_vel',
             description='Velocity command output topic'),
         DeclareLaunchArgument(
             'auto_log_topic', default_value='/auto_log',
             description='Telemetry log output topic'),
+
+        # Rosbag recorder arguments
+        DeclareLaunchArgument(
+            'enable_bag_record', default_value='true',
+            description='Enable automatic rosbag recording'),
+        DeclareLaunchArgument(
+            'bag_output_dir', default_value='~/rosbag2',
+            description='Directory to save rosbag files'),
+        DeclareLaunchArgument(
+            'exclude_topics', default_value='',
+            description='Regex pattern for topics to exclude from recording'),
 
         # Control parameters
         DeclareLaunchArgument('Kp', default_value='0.0'),
@@ -90,6 +102,24 @@ def generate_launch_description():
                 'pwm_min': LaunchConfiguration('pwm_min'),
                 'pwm_max': LaunchConfiguration('pwm_max'),
                 'odom_source': LaunchConfiguration('odom_source'),
+            }],
+            output='screen',
+        ),
+
+        Node(
+            condition=IfCondition(
+                LaunchConfiguration('enable_bag_record')),
+            package='look_ahead_control',
+            executable='rosbag_recorder',
+            name='rosbag_recorder',
+            remappings=[
+                ('/mav/modes', modes_topic),
+            ],
+            parameters=[{
+                'bag_output_dir':
+                    LaunchConfiguration('bag_output_dir'),
+                'exclude_topics':
+                    LaunchConfiguration('exclude_topics'),
             }],
             output='screen',
         ),
