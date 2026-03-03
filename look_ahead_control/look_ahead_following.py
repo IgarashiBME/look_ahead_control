@@ -70,11 +70,11 @@ class LookAheadFollowing(Node):
         self.declare_parameter('cte_threshold', 0.1)
         self.declare_parameter('wp_arrival_dist', 0.1)
         self.declare_parameter('wp_skip_dist', 0.8)
-        self.declare_parameter('throttle_scale', 0.5)
-        self.declare_parameter('pivot_scale', 0.5)
+        self.declare_parameter('throttle_range', 250.0)
+        self.declare_parameter('steering_range', 500.0)
+        self.declare_parameter('pivot_range', 250.0)
         self.declare_parameter('driver_mix', 0.0)
         self.declare_parameter('pwm_center', 1500.0)
-        self.declare_parameter('pwm_range', 500.0)
         self.declare_parameter('pwm_min', 1000.0)
         self.declare_parameter('pwm_max', 2000.0)
         self.declare_parameter('steering_reverse', 0.0)
@@ -230,28 +230,28 @@ class LookAheadFollowing(Node):
 
     def control_publish(self, steering_ang, translation, pid):
         """Compute cmd_vel and RC PWM independently from control values."""
-        throttle_scale = self.get_parameter(
-            'throttle_scale').get_parameter_value().double_value
-        pivot_scale = self.get_parameter(
-            'pivot_scale').get_parameter_value().double_value
+        throttle_range = self.get_parameter(
+            'throttle_range').get_parameter_value().double_value
+        steering_range = self.get_parameter(
+            'steering_range').get_parameter_value().double_value
+        pivot_range = self.get_parameter(
+            'pivot_range').get_parameter_value().double_value
         pivot_threshold = self.get_parameter(
             'pivot_threshold').get_parameter_value().double_value
         driver_mix = self.get_parameter(
             'driver_mix').get_parameter_value().double_value
 
-        # Compute throttle and steering
+        # Compute throttle, steering, and effective steering range
         if abs(steering_ang) > pivot_threshold:
             # Pivot turn
-            if steering_ang >= 0:
-                throttle = 0.0
-                steering = pivot_scale
-            else:
-                throttle = 0.0
-                steering = -pivot_scale
+            throttle = 0.0
+            steering = 1.0 if steering_ang >= 0 else -1.0
+            eff_steer_range = pivot_range
         else:
             # Normal drive
-            throttle = throttle_scale * translation
+            throttle = float(translation)
             steering = pid
+            eff_steer_range = steering_range
 
         # cmd_vel: computed directly from control values (ROS convention)
         self.cmdvel.linear.x = float(throttle)
@@ -263,30 +263,27 @@ class LookAheadFollowing(Node):
             'steering_reverse').get_parameter_value().double_value
         steer_sign = -1.0 if steering_reverse >= 0.5 else 1.0
 
-        if driver_mix >= 0.5:
-            # Passthrough: driver handles mixing
-            # ch1=throttle, ch2=steering
-            ch1 = max(-1.0, min(1.0, throttle))
-            ch2 = max(-1.0, min(1.0, steer_sign * steering))
-        else:
-            # Differential: node mixes into left/right
-            # ch1=left, ch2=right
-            ch1 = max(-1.0, min(1.0, throttle - steering))
-            ch2 = max(-1.0, min(1.0, throttle + steering))
-
-        # PWM parameters
         pwm_center = self.get_parameter(
             'pwm_center').get_parameter_value().double_value
-        pwm_range = self.get_parameter(
-            'pwm_range').get_parameter_value().double_value
         pwm_min = self.get_parameter(
             'pwm_min').get_parameter_value().double_value
         pwm_max = self.get_parameter(
             'pwm_max').get_parameter_value().double_value
 
-        # Map to PWM
-        ch1_pwm = int(pwm_center + ch1 * pwm_range)
-        ch2_pwm = int(pwm_center + ch2 * pwm_range)
+        if driver_mix >= 0.5:
+            # Passthrough: ch1=throttle, ch2=steering
+            ch1_pwm = int(pwm_center
+                          + throttle * throttle_range)
+            ch2_pwm = int(pwm_center
+                          + steer_sign * steering * eff_steer_range)
+        else:
+            # Differential: ch1=left, ch2=right
+            ch1_pwm = int(pwm_center
+                          + throttle * throttle_range
+                          - steering * eff_steer_range)
+            ch2_pwm = int(pwm_center
+                          + throttle * throttle_range
+                          + steering * eff_steer_range)
 
         # Safety clamp
         ch1_pwm = max(int(pwm_min), min(int(pwm_max), ch1_pwm))
