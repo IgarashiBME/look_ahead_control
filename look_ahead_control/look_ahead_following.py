@@ -57,6 +57,7 @@ class LookAheadFollowing(Node):
         self.prev_relative_bearing = 0.0
         self.ch1_pwm = 1500
         self.ch2_pwm = 1500
+        self.ch3_pwm = 1500
 
         # mav_modes
         self.mission_start = False
@@ -80,6 +81,12 @@ class LookAheadFollowing(Node):
         self.declare_parameter('pwm_max', 2000.0)
         self.declare_parameter('steering_reverse', 0.0)
         self.declare_parameter('throttle_reverse', 0.0)
+        self.declare_parameter('K_rudder', 0.0)
+        self.declare_parameter('rudder_center', 1500.0)
+        self.declare_parameter('rudder_range', 500.0)
+        self.declare_parameter('rudder_min', 1000.0)
+        self.declare_parameter('rudder_max', 2000.0)
+        self.declare_parameter('rudder_reverse', 0.0)
         self.declare_parameter('cmd_vel_speed', 0.5)
         self.declare_parameter('cmd_vel_steer_scale', 0.002)
         self.declare_parameter('cmd_vel_pivot_rate', 0.5)
@@ -304,14 +311,35 @@ class LookAheadFollowing(Node):
         ch1_pwm = max(int(pwm_min), min(int(pwm_max), ch1_pwm))
         ch2_pwm = max(int(pwm_min), min(int(pwm_max), ch2_pwm))
 
+        # Rudder channel (ch3): pid * K_rudder
+        k_rudder = self.get_parameter(
+            'K_rudder').get_parameter_value().double_value
+        rudder_center = self.get_parameter(
+            'rudder_center').get_parameter_value().double_value
+        rudder_range = self.get_parameter(
+            'rudder_range').get_parameter_value().double_value
+        rudder_min = self.get_parameter(
+            'rudder_min').get_parameter_value().double_value
+        rudder_max = self.get_parameter(
+            'rudder_max').get_parameter_value().double_value
+        rudder_reverse = self.get_parameter(
+            'rudder_reverse').get_parameter_value().double_value
+        rudder_sign = -1.0 if rudder_reverse >= 0.5 else 1.0
+
+        rudder_us = steering_us * k_rudder
+        rudder_us = max(-rudder_range, min(rudder_range, rudder_us))
+        ch3_pwm = int(rudder_center + rudder_sign * rudder_us)
+        ch3_pwm = max(int(rudder_min), min(int(rudder_max), ch3_pwm))
+
         # Publish RC PWM (primary output)
         rc_msg = UInt16MultiArray()
-        rc_msg.data = [ch1_pwm, ch2_pwm]
+        rc_msg.data = [ch1_pwm, ch2_pwm, ch3_pwm]
         self.rc_pwm_pub.publish(rc_msg)
 
         # Store for AutoLog
         self.ch1_pwm = ch1_pwm
         self.ch2_pwm = ch2_pwm
+        self.ch3_pwm = ch3_pwm
 
     def loop(self):
         rate = self.create_rate(FREQUENCY)
@@ -475,6 +503,7 @@ class LookAheadFollowing(Node):
             auto_log_msg.angular_z = self.cmdvel.angular.z
             auto_log_msg.ch1_pwm = self.ch1_pwm
             auto_log_msg.ch2_pwm = self.ch2_pwm
+            auto_log_msg.ch3_pwm = self.ch3_pwm
             self.auto_log_pub.publish(auto_log_msg)
 
             # when reaching the look-ahead distance, read the next waypoint
@@ -499,8 +528,10 @@ class LookAheadFollowing(Node):
                     # Neutral PWM
                     pwm_center = int(self.get_parameter(
                         'pwm_center').get_parameter_value().double_value)
+                    rudder_center = int(self.get_parameter(
+                        'rudder_center').get_parameter_value().double_value)
                     rc_stop = UInt16MultiArray()
-                    rc_stop.data = [pwm_center, pwm_center]
+                    rc_stop.data = [pwm_center, pwm_center, rudder_center]
                     self.rc_pwm_pub.publish(rc_stop)
                     self.cmdvel.linear.x = 0.0
                     self.cmdvel.angular.z = 0.0
