@@ -83,7 +83,6 @@ class LookAheadFollowing(Node):
         self.declare_parameter('throttle_reverse', 0.0)
         self.declare_parameter('K_rudder', 0.0)
         self.declare_parameter('rudder_center', 1500.0)
-        self.declare_parameter('rudder_range', 500.0)
         self.declare_parameter('rudder_min', 1000.0)
         self.declare_parameter('rudder_max', 2000.0)
         self.declare_parameter('rudder_reverse', 0.0)
@@ -316,8 +315,6 @@ class LookAheadFollowing(Node):
             'K_rudder').get_parameter_value().double_value
         rudder_center = self.get_parameter(
             'rudder_center').get_parameter_value().double_value
-        rudder_range = self.get_parameter(
-            'rudder_range').get_parameter_value().double_value
         rudder_min = self.get_parameter(
             'rudder_min').get_parameter_value().double_value
         rudder_max = self.get_parameter(
@@ -327,7 +324,6 @@ class LookAheadFollowing(Node):
         rudder_sign = -1.0 if rudder_reverse >= 0.5 else 1.0
 
         rudder_us = steering_us * k_rudder
-        rudder_us = max(-rudder_range, min(rudder_range, rudder_us))
         ch3_pwm = int(rudder_center + rudder_sign * rudder_us)
         ch3_pwm = max(int(rudder_min), min(int(rudder_max), ch3_pwm))
 
