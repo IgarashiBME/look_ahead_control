@@ -79,6 +79,7 @@ class LookAheadFollowing(Node):
         self.declare_parameter('pwm_min', 1000.0)
         self.declare_parameter('pwm_max', 2000.0)
         self.declare_parameter('steering_reverse', 0.0)
+        self.declare_parameter('throttle_reverse', 0.0)
         self.declare_parameter('cmd_vel_speed', 0.5)
         self.declare_parameter('cmd_vel_steer_scale', 0.002)
         self.declare_parameter('cmd_vel_pivot_rate', 0.5)
@@ -273,6 +274,9 @@ class LookAheadFollowing(Node):
         steering_reverse = self.get_parameter(
             'steering_reverse').get_parameter_value().double_value
         steer_sign = -1.0 if steering_reverse >= 0.5 else 1.0
+        throttle_reverse = self.get_parameter(
+            'throttle_reverse').get_parameter_value().double_value
+        throttle_sign = -1.0 if throttle_reverse >= 0.5 else 1.0
 
         pwm_center = self.get_parameter(
             'pwm_center').get_parameter_value().double_value
@@ -284,17 +288,17 @@ class LookAheadFollowing(Node):
         if driver_mix >= 0.5:
             # Passthrough: ch1=throttle, ch2=steering
             ch1_pwm = int(pwm_center
-                          + throttle * throttle_range)
+                          + throttle_sign * throttle * throttle_range)
             ch2_pwm = int(pwm_center
                           + steer_sign * steering_us)
         else:
             # Differential: ch1=left, ch2=right
             ch1_pwm = int(pwm_center
-                          + throttle * throttle_range
-                          - steering_us)
+                          + throttle_sign * throttle * throttle_range
+                          - steer_sign * steering_us)
             ch2_pwm = int(pwm_center
-                          + throttle * throttle_range
-                          + steering_us)
+                          + throttle_sign * throttle * throttle_range
+                          + steer_sign * steering_us)
 
         # Safety clamp
         ch1_pwm = max(int(pwm_min), min(int(pwm_max), ch1_pwm))
