@@ -20,6 +20,7 @@ from geometry_msgs.msg import Twist
 
 from rcl_interfaces.msg import ParameterEvent
 from bme_common_msgs.msg import AutoLog
+from bme_common_msgs.msg import ControlParams
 from bme_common_msgs.msg import GnssSolution
 from bme_common_msgs.msg import MavModes
 
@@ -33,6 +34,7 @@ BACKWARD_CONST = -1
 
 # frequency [Hz]
 FREQUENCY = 10
+CONTROL_PARAMS_PERIOD_SEC = 10.0
 
 # MAVLink number
 MAV_CMD_NAV_WAYPOINT = 16
@@ -67,6 +69,7 @@ class LookAheadFollowing(Node):
         # Declare parameters with defaults
         self.declare_parameter('Kp', 0.0)
         self.declare_parameter('Kcte', 0.0)
+        self.declare_parameter('Ki', 0.0)
         self.declare_parameter('Kd', 0.0)
         self.declare_parameter('look_ahead', 0.0)
         self.declare_parameter('pivot_threshold', 40.0)
@@ -118,6 +121,8 @@ class LookAheadFollowing(Node):
         # Publishers
         self.auto_log_pub = self.create_publisher(
             AutoLog, '/auto_log', QoSProfile(depth=1))
+        self.control_params_pub = self.create_publisher(
+            ControlParams, '/control_params', QoSProfile(depth=1))
 
         self.rc_pwm_pub = self.create_publisher(
             UInt16MultiArray, '/rc_pwm', QoSProfile(depth=1))
@@ -130,6 +135,9 @@ class LookAheadFollowing(Node):
         self.create_subscription(
             ParameterEvent, '/parameter_events',
             self.param_event_callback, QoSProfile(depth=10))
+
+        self.control_params_timer = self.create_timer(
+            CONTROL_PARAMS_PERIOD_SEC, self.publish_control_params)
 
         # Load saved QGC parameters at startup
         self._load_bridge_params()
@@ -219,16 +227,59 @@ class LookAheadFollowing(Node):
         if msg.node != '/mavlink_bridge_node':
             return
         from rclpy.parameter import Parameter
+        synced = False
         for param in msg.changed_parameters:
             if self.has_parameter(param.name):
                 try:
                     self.set_parameters([Parameter(
                         param.name, Parameter.Type.DOUBLE,
                         param.value.double_value)])
+                    synced = True
                     self.get_logger().info(
                         f"param sync: {param.name}={param.value.double_value}")
                 except Exception:
                     pass
+        if synced:
+            self.publish_control_params()
+
+    def _get_double_param(self, name):
+        return self.get_parameter(name).get_parameter_value().double_value
+
+    def publish_control_params(self):
+        """Publish the current QGC-tunable control parameter snapshot."""
+        msg = ControlParams()
+        msg.stamp = self.get_clock().now().to_msg()
+
+        msg.kp = self._get_double_param('Kp')
+        msg.kcte = self._get_double_param('Kcte')
+        msg.ki = self._get_double_param('Ki')
+        msg.kd = self._get_double_param('Kd')
+        msg.look_ahead = self._get_double_param('look_ahead')
+        msg.pivot_threshold = self._get_double_param('pivot_threshold')
+        msg.cte_threshold = self._get_double_param('cte_threshold')
+        msg.wp_arrival_dist = self._get_double_param('wp_arrival_dist')
+        msg.wp_skip_dist = self._get_double_param('wp_skip_dist')
+
+        msg.throttle_range = self._get_double_param('throttle_range')
+        msg.pivot_range = self._get_double_param('pivot_range')
+        msg.driver_mix = self._get_double_param('driver_mix')
+        msg.pwm_center = self._get_double_param('pwm_center')
+        msg.pwm_min = self._get_double_param('pwm_min')
+        msg.pwm_max = self._get_double_param('pwm_max')
+        msg.steering_reverse = self._get_double_param('steering_reverse')
+        msg.throttle_reverse = self._get_double_param('throttle_reverse')
+
+        msg.k_rudder = self._get_double_param('K_rudder')
+        msg.rudder_center = self._get_double_param('rudder_center')
+        msg.rudder_min = self._get_double_param('rudder_min')
+        msg.rudder_max = self._get_double_param('rudder_max')
+        msg.rudder_reverse = self._get_double_param('rudder_reverse')
+
+        msg.cmd_vel_speed = self._get_double_param('cmd_vel_speed')
+        msg.cmd_vel_steer_scale = self._get_double_param('cmd_vel_steer_scale')
+        msg.cmd_vel_pivot_rate = self._get_double_param('cmd_vel_pivot_rate')
+
+        self.control_params_pub.publish(msg)
 
     def mav_modes_callback(self, msg):
         self.mission_start = msg.mission_start
