@@ -92,6 +92,10 @@ class LookAheadFollowing(Node):
         self.declare_parameter('cmd_vel_speed', 0.5)
         self.declare_parameter('cmd_vel_steer_scale', 0.002)
         self.declare_parameter('cmd_vel_pivot_rate', 0.5)
+        self.declare_parameter('gnss_ofs_fwd', 0.0)
+        self.declare_parameter('gnss_ofs_left', 0.0)
+        self.declare_parameter('gnss_ofs_up', 0.0)
+        self.declare_parameter('gnss_ofs_yaw', 0.0)
         self.declare_parameter('odom_source', 'odom')
 
         # Subscribers — select odometry source by parameter
@@ -278,6 +282,11 @@ class LookAheadFollowing(Node):
         msg.cmd_vel_speed = self._get_double_param('cmd_vel_speed')
         msg.cmd_vel_steer_scale = self._get_double_param('cmd_vel_steer_scale')
         msg.cmd_vel_pivot_rate = self._get_double_param('cmd_vel_pivot_rate')
+
+        msg.gnss_ofs_fwd = self._get_double_param('gnss_ofs_fwd')
+        msg.gnss_ofs_left = self._get_double_param('gnss_ofs_left')
+        msg.gnss_ofs_up = self._get_double_param('gnss_ofs_up')
+        msg.gnss_ofs_yaw = self._get_double_param('gnss_ofs_yaw')
 
         self.control_params_pub.publish(msg)
 
