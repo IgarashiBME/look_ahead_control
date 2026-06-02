@@ -65,10 +65,14 @@ All parameters are double type for MAVLink GCS (QGroundControl) compatibility. D
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `Kp` | 0.0 | Proportional gain (steering_ang in degrees) |
-| `Kcte` | 0.0 | Cross-track error gain (lateral offset in meters) |
+| `Kcte` | 0.0 | Cross-track error proportional gain (lateral offset in meters) |
+| `Ki_cte` | 2.0 | Cross-track error integral gain |
 | `look_ahead` | 0.0 | Look-ahead distance (m) |
 | `pivot_threshold` | 40.0 | Yaw error threshold for pivot turn (degrees) |
-| `cte_threshold` | 0.1 | Lateral distance threshold to enable CTE correction (m) |
+| `cte_threshold` | 0.1 | Lateral distance threshold to enable proportional CTE correction (m) |
+| `cte_i_limit` | 1.5 | Cross-track integral clamp (m*s) |
+| `cte_i_active` | 0.8 | CTE range where integral accumulation is active (m) |
+| `cte_i_decay` | 0.98 | Per-cycle integral decay when accumulation is disabled |
 | `wp_arrival_dist` | 0.1 | Waypoint arrival distance along path axis (m) |
 | `wp_skip_dist` | 0.8 | Skip consecutive waypoints closer than this (m) |
 

@@ -111,7 +111,7 @@ ARM + AUTO が確認されると制御が開始される。各ループイテレ
 2. **座標変換**: 前WP→現WPの経路軸に沿った座標系に変換
 3. **Look-ahead制御**: ルックアヘッド距離に基づきベアリング角を計算
 4. **前後判定**: 前進/後退のどちらがヨー誤差が小さいかで走行方向を決定
-5. **PID計算**: `pid = Kp * steering_ang - Kcte * cross_track_error`
+5. **PID計算**: `pid = Kp * steering_ang + Kd * d(steering_ang) + Kcte * cross_track_error + Ki_cte * integral(cross_track_error)`
 6. **出力**: `/rc_pwm` (PWM) と `/cmd_vel` (速度) を publish
 7. **テレメトリ**: `/auto_log` に制御状態を publish (bridge経由でQGCに送信)
 8. **WP到達判定**: 変換座標上で `(wp_x_tf - own_x_tf) < wp_arrival_dist` なら次WPへ

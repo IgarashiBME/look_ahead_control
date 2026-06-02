@@ -60,6 +60,7 @@ class LookAheadFollowing(Node):
         self.ch1_pwm = 1500
         self.ch2_pwm = 1500
         self.ch3_pwm = 1500
+        self.cte_integral = 0.0
 
         # mav_modes
         self.mission_start = False
@@ -69,11 +70,14 @@ class LookAheadFollowing(Node):
         # Declare parameters with defaults
         self.declare_parameter('Kp', 0.0)
         self.declare_parameter('Kcte', 0.0)
-        self.declare_parameter('Ki', 0.0)
+        self.declare_parameter('Ki_cte', 2.0)
         self.declare_parameter('Kd', 0.0)
         self.declare_parameter('look_ahead', 0.0)
         self.declare_parameter('pivot_threshold', 40.0)
         self.declare_parameter('cte_threshold', 0.1)
+        self.declare_parameter('cte_i_limit', 1.5)
+        self.declare_parameter('cte_i_active', 0.8)
+        self.declare_parameter('cte_i_decay', 0.98)
         self.declare_parameter('wp_arrival_dist', 0.1)
         self.declare_parameter('wp_skip_dist', 0.8)
         self.declare_parameter('throttle_range', 250.0)
@@ -256,11 +260,14 @@ class LookAheadFollowing(Node):
 
         msg.kp = self._get_double_param('Kp')
         msg.kcte = self._get_double_param('Kcte')
-        msg.ki = self._get_double_param('Ki')
+        msg.ki_cte = self._get_double_param('Ki_cte')
         msg.kd = self._get_double_param('Kd')
         msg.look_ahead = self._get_double_param('look_ahead')
         msg.pivot_threshold = self._get_double_param('pivot_threshold')
         msg.cte_threshold = self._get_double_param('cte_threshold')
+        msg.cte_i_limit = self._get_double_param('cte_i_limit')
+        msg.cte_i_active = self._get_double_param('cte_i_active')
+        msg.cte_i_decay = self._get_double_param('cte_i_decay')
         msg.wp_arrival_dist = self._get_double_param('wp_arrival_dist')
         msg.wp_skip_dist = self._get_double_param('wp_skip_dist')
 
@@ -406,6 +413,7 @@ class LookAheadFollowing(Node):
             if self.waypoint_total_seq != len(self.waypoint_seq) \
                     or self.waypoint_total_seq == 0:
                 seq = 1
+                self.cte_integral = 0.0
                 self.get_logger().info(
                     "mission_checker", throttle_duration_sec=1.0)
                 rate.sleep()
@@ -414,6 +422,7 @@ class LookAheadFollowing(Node):
             # mission_start checker (AUTO mode + ARM)
             if self.base_mode != ARDUPILOT_AUTO_BASE \
                     or self.custom_mode != ARDUPILOT_AUTO_CUSTOM:
+                self.cte_integral = 0.0
                 self.get_logger().info(
                     "mission_start_checker", throttle_duration_sec=1.0)
                 rate.sleep()
@@ -437,6 +446,17 @@ class LookAheadFollowing(Node):
                 'look_ahead').get_parameter_value().double_value
             cte_threshold = self.get_parameter(
                 'cte_threshold').get_parameter_value().double_value
+            ki_cte = self.get_parameter(
+                'Ki_cte').get_parameter_value().double_value
+            cte_i_limit = max(0.0, self.get_parameter(
+                'cte_i_limit').get_parameter_value().double_value)
+            cte_i_active = max(0.0, self.get_parameter(
+                'cte_i_active').get_parameter_value().double_value)
+            cte_i_decay = self.get_parameter(
+                'cte_i_decay').get_parameter_value().double_value
+            cte_i_decay = min(1.0, max(0.0, cte_i_decay))
+            pivot_threshold = self.get_parameter(
+                'pivot_threshold').get_parameter_value().double_value
             wp_arrival_dist = self.get_parameter(
                 'wp_arrival_dist').get_parameter_value().double_value
             wp_skip_dist = self.get_parameter(
@@ -515,15 +535,27 @@ class LookAheadFollowing(Node):
             translation = FORWARD_CONST
 
             # calculate the steering value
+            cross_track_error = -pose_y_tf
             p_output = kp * relative_bearing
-            cte_output = kcte * pose_y_tf
+            cte_output = kcte * cross_track_error
             kd = self.get_parameter('Kd').get_parameter_value().double_value
             d_output = kd * (relative_bearing - self.prev_relative_bearing)
             self.prev_relative_bearing = relative_bearing
 
-            pid_value = p_output + d_output
-            if abs(pose_y_tf) < cte_threshold:
-                pid_value = p_output + d_output - cte_output
+            is_pivot = abs(relative_bearing) > pivot_threshold
+            if is_pivot:
+                self.cte_integral *= cte_i_decay
+            elif cte_i_active > 0.0 and abs(cross_track_error) <= cte_i_active:
+                self.cte_integral += cross_track_error / FREQUENCY
+            else:
+                self.cte_integral *= cte_i_decay
+            self.cte_integral = max(
+                -cte_i_limit, min(cte_i_limit, self.cte_integral))
+            i_output = ki_cte * self.cte_integral
+
+            pid_value = p_output + d_output + i_output
+            if abs(cross_track_error) < cte_threshold:
+                pid_value += cte_output
 
             # publish rc_pwm (primary) and cmd_vel (derived)
             self.control_publish(relative_bearing, translation, pid_value)
@@ -546,14 +578,19 @@ class LookAheadFollowing(Node):
             auto_log_msg.tf_waypoint_y = float(wp_y_tf)
             auto_log_msg.tf_pose_x = float(pose_x_tf)
             auto_log_msg.tf_pose_y = float(pose_y_tf)
-            auto_log_msg.cross_track_error = float(-pose_y_tf)
+            auto_log_msg.cross_track_error = float(cross_track_error)
             auto_log_msg.kp = kp
             auto_log_msg.kcte = kcte
+            auto_log_msg.ki_cte = ki_cte
             auto_log_msg.look_ahead_dist = look_ahead_dist
+            auto_log_msg.cte_i_limit = cte_i_limit
+            auto_log_msg.cte_i_active = cte_i_active
+            auto_log_msg.cte_i_decay = cte_i_decay
             auto_log_msg.p_output = float(p_output)
             auto_log_msg.cte_output = float(cte_output)
             auto_log_msg.kd = kd
             auto_log_msg.d_output = float(d_output)
+            auto_log_msg.i_output = float(i_output)
             auto_log_msg.relative_bearing = float(relative_bearing)
             auto_log_msg.linear_x = self.cmdvel.linear.x
             auto_log_msg.angular_z = self.cmdvel.angular.z
@@ -567,6 +604,7 @@ class LookAheadFollowing(Node):
                 pre_wp_x = self.waypoint_x[seq]
                 pre_wp_y = self.waypoint_y[seq]
                 seq = seq + 1
+                self.cte_integral = 0.0
                 try:
                     a = np.array([pre_wp_x, pre_wp_y])
                     b = np.array([self.waypoint_x[seq],
@@ -574,6 +612,7 @@ class LookAheadFollowing(Node):
 
                     if np.linalg.norm(a - b) < wp_skip_dist:
                         seq = seq + 1
+                        self.cte_integral = 0.0
                 except IndexError:
                     pass
 
@@ -610,6 +649,7 @@ class LookAheadFollowing(Node):
                 auto_log_msg.waypoint_seq = 0
                 self.auto_log_pub.publish(auto_log_msg)
 
+                self.cte_integral = 0.0
                 self.get_logger().info("disarmed — ready for re-arm")
                 seq = 1
                 continue
