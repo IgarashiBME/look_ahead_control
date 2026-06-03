@@ -88,6 +88,8 @@ class LookAheadFollowing(Node):
         self.declare_parameter('pwm_max', 2000.0)
         self.declare_parameter('steering_reverse', 0.0)
         self.declare_parameter('throttle_reverse', 0.0)
+        self.declare_parameter('left_motor_reverse', 0.0)
+        self.declare_parameter('right_motor_reverse', 0.0)
         self.declare_parameter('K_rudder', 0.0)
         self.declare_parameter('rudder_center', 1500.0)
         self.declare_parameter('rudder_min', 1000.0)
@@ -279,6 +281,8 @@ class LookAheadFollowing(Node):
         msg.pwm_max = self._get_double_param('pwm_max')
         msg.steering_reverse = self._get_double_param('steering_reverse')
         msg.throttle_reverse = self._get_double_param('throttle_reverse')
+        msg.left_motor_reverse = self._get_double_param('left_motor_reverse')
+        msg.right_motor_reverse = self._get_double_param('right_motor_reverse')
 
         msg.k_rudder = self._get_double_param('K_rudder')
         msg.rudder_center = self._get_double_param('rudder_center')
@@ -350,6 +354,12 @@ class LookAheadFollowing(Node):
         throttle_reverse = self.get_parameter(
             'throttle_reverse').get_parameter_value().double_value
         throttle_sign = -1.0 if throttle_reverse >= 0.5 else 1.0
+        left_motor_reverse = self.get_parameter(
+            'left_motor_reverse').get_parameter_value().double_value
+        left_motor_sign = -1.0 if left_motor_reverse >= 0.5 else 1.0
+        right_motor_reverse = self.get_parameter(
+            'right_motor_reverse').get_parameter_value().double_value
+        right_motor_sign = -1.0 if right_motor_reverse >= 0.5 else 1.0
 
         pwm_center = self.get_parameter(
             'pwm_center').get_parameter_value().double_value
@@ -366,12 +376,16 @@ class LookAheadFollowing(Node):
                           + steer_sign * steering_us)
         else:
             # Differential: ch1=left, ch2=right
+            left_us = left_motor_sign * (
+                throttle_sign * throttle * throttle_range
+                - steer_sign * steering_us)
+            right_us = right_motor_sign * (
+                throttle_sign * throttle * throttle_range
+                + steer_sign * steering_us)
             ch1_pwm = int(pwm_center
-                          + throttle_sign * throttle * throttle_range
-                          - steer_sign * steering_us)
+                          + left_us)
             ch2_pwm = int(pwm_center
-                          + throttle_sign * throttle * throttle_range
-                          + steer_sign * steering_us)
+                          + right_us)
 
         # Safety clamp
         ch1_pwm = max(int(pwm_min), min(int(pwm_max), ch1_pwm))

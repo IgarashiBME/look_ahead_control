@@ -56,6 +56,9 @@ mavlink_ros2_bridge の paramEntries に登録済み。
 | `pwm_min` | 1000.0 | PWM安全下限 (us) |
 | `pwm_max` | 2000.0 | PWM安全上限 (us) |
 | `steering_reverse` | 0.0 | 0.0=通常, 1.0=passthrough時のステアリング符号を反転 |
+| `throttle_reverse` | 0.0 | 0.0=通常, 1.0=前後方向のスロットル符号を反転 |
+| `left_motor_reverse` | 0.0 | 0.0=通常, 1.0=differential時の左モーター出力を反転 |
+| `right_motor_reverse` | 0.0 | 0.0=通常, 1.0=differential時の右モーター出力を反転 |
 
 ## ミキシングモード
 
@@ -77,6 +80,9 @@ throttle = throttle_scale * translation
 ch1 (left)  = throttle - pid
 ch2 (right) = throttle + pid
 ```
+
+`left_motor_reverse=1.0` の場合は ch1 の中心からの偏差を反転する。
+`right_motor_reverse=1.0` の場合は ch2 の中心からの偏差を反転する。
 
 ピボットターン時 (|steering_ang| > 40度):
 
@@ -112,6 +118,7 @@ ch2 (steering) = steer_sign * (+/-pivot_scale)
 
 `steering_reverse=1.0` の場合、ch2 の符号が反転する。
 これにより ch2>1500=右旋回 の慣例を持つドライバに対応できる。
+`left_motor_reverse` と `right_motor_reverse` は passthrough モードでは使用しない。
 
 ## PWMマッピング (共通)
 
