@@ -61,6 +61,9 @@ class LookAheadFollowing(Node):
         self.ch2_pwm = 1500
         self.ch3_pwm = 1500
         self.cte_integral = 0.0
+        self.itow = 0.0
+        self.rtk_status = 0
+        self.movingbase_status = 0
 
         # mav_modes
         self.mission_start = False
@@ -165,6 +168,9 @@ class LookAheadFollowing(Node):
     def gnss_callback(self, msg):
         self.x = msg.utm_easting
         self.y = msg.utm_northing
+        self.itow = float(msg.itow)
+        self.rtk_status = msg.position_rtk_status
+        self.movingbase_status = msg.heading_rtk_status
 
         # heading_deg (ENU: East=0, CCW positive) → quaternion
         heading_rad = msg.heading_deg * np.pi / 180.0
@@ -577,6 +583,9 @@ class LookAheadFollowing(Node):
             # publish auto_log
             auto_log_msg = AutoLog()
             auto_log_msg.stamp = self.get_clock().now().to_msg()
+            auto_log_msg.itow = self.itow
+            auto_log_msg.rtk_status = self.rtk_status
+            auto_log_msg.movingbase_status = self.movingbase_status
             auto_log_msg.waypoint_seq = seq
             auto_log_msg.waypoint_start_x = \
                 self.waypoint_x[seq - 1] if seq > 0 else 0.0
