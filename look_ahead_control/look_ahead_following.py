@@ -15,7 +15,7 @@ from rclpy.qos import QoSProfile
 from pyproj import Proj
 
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Float64MultiArray, UInt16MultiArray
+from std_msgs.msg import Float64MultiArray, UInt16, UInt16MultiArray
 from geometry_msgs.msg import Twist
 
 from rcl_interfaces.msg import ParameterEvent
@@ -64,6 +64,8 @@ class LookAheadFollowing(Node):
         self.itow = 0.0
         self.rtk_status = 0
         self.movingbase_status = 0
+        self.requested_mission_seq = None
+        self.mission_seq_lock = threading.Lock()
 
         # mav_modes
         self.mission_start = False
@@ -130,6 +132,10 @@ class LookAheadFollowing(Node):
         self.create_subscription(
             MavModes, '/mav/modes', self.mav_modes_callback,
             QoSProfile(depth=1))
+
+        self.create_subscription(
+            UInt16, '/mav/mission_set_current',
+            self.mission_set_current_callback, QoSProfile(depth=10))
 
         # Publishers
         self.auto_log_pub = self.create_publisher(
@@ -204,6 +210,8 @@ class LookAheadFollowing(Node):
             self.waypoint_x = []
             self.waypoint_y = []
             self.waypoint_seq = []
+            with self.mission_seq_lock:
+                self.requested_mission_seq = None
 
         self.waypoint_seq.append(seq)
         self.waypoint_total_seq = total_seq
@@ -214,6 +222,49 @@ class LookAheadFollowing(Node):
             f"WP {seq}/{total_seq} cmd={command} "
             f"lat={latitude:.7f} lon={longitude:.7f} "
             f"UTM=({x:.2f}, {y:.2f})")
+
+    def mission_set_current_callback(self, msg):
+        """Store QGC current mission item requests for the control loop."""
+        requested_seq = int(msg.data)
+        with self.mission_seq_lock:
+            self.requested_mission_seq = requested_seq
+        self.get_logger().info(
+            f'MISSION_SET_CURRENT requested: seq={requested_seq}')
+
+    def consume_requested_mission_seq(self, current_seq):
+        """Apply a pending mission item switch and return the new loop seq."""
+        with self.mission_seq_lock:
+            requested_seq = self.requested_mission_seq
+            self.requested_mission_seq = None
+
+        if requested_seq is None:
+            return current_seq
+
+        if len(self.waypoint_x) < 2:
+            self.get_logger().warn(
+                f'MISSION_SET_CURRENT ignored before mission ready: '
+                f'seq={requested_seq}')
+            return current_seq
+
+        target_seq = requested_seq
+        if target_seq == 1 and len(self.waypoint_x) > 2:
+            target_seq = 2
+
+        if target_seq < 1 or target_seq >= len(self.waypoint_x):
+            self.get_logger().warn(
+                f'MISSION_SET_CURRENT ignored: seq={requested_seq} '
+                f'target={target_seq} valid=1..{len(self.waypoint_x) - 1}')
+            return current_seq
+
+        if target_seq == current_seq:
+            return current_seq
+
+        self.cte_integral = 0.0
+        self.prev_relative_bearing = 0.0
+        self.get_logger().info(
+            f'MISSION_SET_CURRENT applied: requested={requested_seq} '
+            f'seq={target_seq}')
+        return target_seq
 
     def _load_bridge_params(self):
         """Load saved QGC parameters from mavlink_bridge's persistence file."""
@@ -438,6 +489,8 @@ class LookAheadFollowing(Node):
                     "mission_checker", throttle_duration_sec=1.0)
                 rate.sleep()
                 continue
+
+            seq = self.consume_requested_mission_seq(seq)
 
             # mission_start checker (AUTO mode + ARM)
             if self.base_mode != ARDUPILOT_AUTO_BASE \
